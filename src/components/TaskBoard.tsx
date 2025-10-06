@@ -3,6 +3,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { User } from '@supabase/supabase-js';
 import { Plus } from 'lucide-react';
 import { Button } from './ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Switch } from './ui/switch';
 import TaskColumn from './TaskColumn';
 import CreateTaskDialog from './CreateTaskDialog';
 import CreateProjectDialog from './CreateProjectDialog';
@@ -41,6 +43,10 @@ const TaskBoard = ({ user }: TaskBoardProps) => {
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [isCreateTaskOpen, setIsCreateTaskOpen] = useState(false);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [assigneeFilter, setAssigneeFilter] = useState<string>('all');
+  const [myTasksOnly, setMyTasksOnly] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<{ id: string; display_name: string | null }[]>([]);
   const { toast } = useToast();
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -53,10 +59,16 @@ const TaskBoard = ({ user }: TaskBoardProps) => {
   }, []);
 
   useEffect(() => {
-    if (selectedProject) {
-      fetchTasks();
-      subscribeToTasks();
-    }
+    if (!selectedProject) return;
+
+    fetchTasks();
+    const unsubscribe = subscribeToTasks();
+
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
   }, [selectedProject]);
 
   const fetchProjects = async () => {
@@ -98,23 +110,40 @@ const TaskBoard = ({ user }: TaskBoardProps) => {
       return;
     }
 
-    // Fetch assignee details separately
+    // Batch-load assignees to avoid N+1
     if (data) {
-      const tasksWithAssignees = await Promise.all(
-        data.map(async (task) => {
-          if (task.assigned_to) {
-            const { data: profile } = await supabase
-              .from('profiles')
-              .select('display_name, avatar_url')
-              .eq('id', task.assigned_to)
-              .single();
-            
-            return { ...task, assignee: profile };
-          }
-          return task;
-        })
-      );
-      setTasks(tasksWithAssignees);
+      const assignedIds = Array.from(new Set((data.map((t: any) => t.assigned_to).filter(Boolean)) as string[]));
+      let profilesById: Record<string, { display_name: string | null; avatar_url: string | null }> = {};
+      if (assignedIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, display_name, avatar_url')
+          .in('id', assignedIds as any);
+        if (profiles) {
+          profilesById = profiles.reduce((acc: any, p: any) => {
+            acc[p.id] = { display_name: p.display_name, avatar_url: p.avatar_url };
+            return acc;
+          }, {});
+        }
+      }
+
+      const tasksWithAssignees = data.map((task: any) => ({
+        ...task,
+        assignee: task.assigned_to ? profilesById[task.assigned_to] : undefined,
+      }));
+      setTasks(tasksWithAssignees as any);
+
+      // populate team members list (lightweight approach)
+      const memberIds = Array.from(new Set((data.map((t: any) => t.assigned_to).filter(Boolean)) as string[]));
+      if (memberIds.length > 0) {
+        const { data: members } = await supabase
+          .from('profiles')
+          .select('id, display_name')
+          .in('id', memberIds as any);
+        if (members) setTeamMembers(members as any);
+      } else {
+        setTeamMembers([]);
+      }
     }
   };
 
@@ -153,7 +182,7 @@ const TaskBoard = ({ user }: TaskBoardProps) => {
     if (!selectedProject) return;
 
     const channel = supabase
-      .channel('tasks-changes')
+      .channel(`tasks-changes-${selectedProject}`)
       .on(
         'postgres_changes',
         {
@@ -183,9 +212,29 @@ const TaskBoard = ({ user }: TaskBoardProps) => {
     setIsCreateTaskOpen(false);
   };
 
-  const todoTasks = tasks.filter((t) => t.status === 'todo');
-  const inProgressTasks = tasks.filter((t) => t.status === 'in_progress');
-  const completedTasks = tasks.filter((t) => t.status === 'completed');
+  const applyFilters = (list: Task[]) => {
+    let filtered = list;
+    if (assigneeFilter === 'unassigned') {
+      filtered = filtered.filter((t) => !t.assigned_to);
+    } else if (assigneeFilter !== 'all') {
+      filtered = filtered.filter((t) => t.assigned_to === assigneeFilter);
+    }
+    if (myTasksOnly && user?.id) {
+      filtered = filtered.filter((t) => t.assigned_to === user.id);
+    }
+    return filtered;
+  };
+
+  const todoTasks = applyFilters(tasks.filter((t) => t.status === 'todo'));
+  const inProgressTasks = applyFilters(tasks.filter((t) => t.status === 'in_progress'));
+  const completedTasks = applyFilters(tasks.filter((t) => t.status === 'completed'));
+  const filterByQuery = (list: Task[]) => {
+    if (!query.trim()) return list;
+    const q = query.toLowerCase();
+    return list.filter((t) =>
+      t.title.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q)
+    );
+  };
 
   return (
     <div className="h-full flex flex-col">
@@ -226,6 +275,40 @@ const TaskBoard = ({ user }: TaskBoardProps) => {
             ))}
           </div>
         )}
+
+        <div className="mt-4">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search tasks by title or description..."
+            className="w-full md:w-96 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+          />
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Assignee</span>
+            <Select value={assigneeFilter} onValueChange={setAssigneeFilter}>
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="All" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="unassigned">Unassigned</SelectItem>
+                {teamMembers.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.display_name || 'Unknown'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Switch id="my-tasks" checked={myTasksOnly} onCheckedChange={setMyTasksOnly} />
+            <label htmlFor="my-tasks" className="text-sm">My tasks</label>
+          </div>
+        </div>
       </header>
 
       <div className="flex-1 overflow-auto p-6">
@@ -248,19 +331,19 @@ const TaskBoard = ({ user }: TaskBoardProps) => {
               <TaskColumn
                 title="To Do"
                 status="todo"
-                tasks={todoTasks}
+                tasks={filterByQuery(todoTasks)}
                 onRefresh={fetchTasks}
               />
               <TaskColumn
                 title="In Progress"
                 status="in_progress"
-                tasks={inProgressTasks}
+                tasks={filterByQuery(inProgressTasks)}
                 onRefresh={fetchTasks}
               />
               <TaskColumn
                 title="Completed"
                 status="completed"
-                tasks={completedTasks}
+                tasks={filterByQuery(completedTasks)}
                 onRefresh={fetchTasks}
               />
             </div>

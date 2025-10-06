@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { Loader2 } from 'lucide-react';
 
 interface CreateProjectDialogProps {
   open: boolean;
@@ -27,6 +28,8 @@ const CreateProjectDialog = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!name.trim()) return;
+
     setLoading(true);
 
     const { error } = await supabase.from('projects').insert({
@@ -40,36 +43,47 @@ const CreateProjectDialog = ({
     if (error) {
       toast({
         title: 'Error',
-        description: 'Failed to create project',
+        description: 'Failed to create project. Please try again.',
         variant: 'destructive',
       });
       return;
     }
 
     toast({
-      title: 'Project created',
-      description: 'Your project has been successfully created',
+      title: 'Project Created',
+      description: 'Your new project has been successfully created.',
     });
 
     setName('');
     setDescription('');
     onProjectCreated();
+    onOpenChange(false);
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent
+        className="
+          w-[95vw] max-w-[700px] sm:w-full sm:max-w-2xl md:max-w-3xl 
+          rounded-lg border border-border/50 bg-background/95 
+          p-6 backdrop-blur transition-all duration-200
+        "
+      >
         <DialogHeader>
-          <DialogTitle>Create New Project</DialogTitle>
+          <DialogTitle className="text-xl font-semibold">New Project</DialogTitle>
+          <DialogDescription className="text-sm text-muted-foreground">
+            Create a new project to organize your tasks, teams, and goals.
+          </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
+
+        <form onSubmit={handleSubmit} className="mt-4 space-y-5">
           <div className="space-y-2">
-            <Label htmlFor="name">Project Name</Label>
+            <Label htmlFor="name">Project Name <span className="text-destructive">*</span></Label>
             <Input
               id="name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Enter project name"
+              placeholder="e.g. Marketing Website Redesign"
               required
             />
           </div>
@@ -80,17 +94,29 @@ const CreateProjectDialog = ({
               id="description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Enter project description (optional)"
+              placeholder="Briefly describe this project (optional)"
               rows={3}
             />
           </div>
 
-          <div className="flex gap-2 justify-end">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={loading}
+            >
               Cancel
             </Button>
             <Button type="submit" disabled={loading}>
-              {loading ? 'Creating...' : 'Create Project'}
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                'Create Project'
+              )}
             </Button>
           </div>
         </form>

@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback } from './ui/avatar';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Send } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 
 interface Task {
   id: string;
@@ -41,12 +42,24 @@ const TaskDetailsDialog = ({ task, open, onOpenChange, onRefresh }: TaskDetailsD
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
   const [loading, setLoading] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(task.title);
+  const [editingDescription, setEditingDescription] = useState(task.description || '');
+  const [editingStatus, setEditingStatus] = useState<Task['status']>(task.status);
+  const [editingAssignee, setEditingAssignee] = useState<string>(task.assigned_to || 'unassigned');
+  const [saving, setSaving] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<{ id: string; display_name: string | null }[]>([]);
   const { toast } = useToast();
 
   useEffect(() => {
     if (open) {
       fetchComments();
       subscribeToComments();
+      fetchTeamMembers();
+      // reset editors to latest task data
+      setEditingTitle(task.title);
+      setEditingDescription(task.description || '');
+      setEditingStatus(task.status);
+      setEditingAssignee(task.assigned_to || 'unassigned');
     }
   }, [open, task.id]);
 
@@ -116,6 +129,30 @@ const TaskDetailsDialog = ({ task, open, onOpenChange, onRefresh }: TaskDetailsD
     setNewComment('');
   };
 
+  const fetchTeamMembers = async () => {
+    const { data } = await supabase.from('profiles').select('id, display_name');
+    if (data) setTeamMembers(data as any);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    const updates: any = {
+      title: editingTitle,
+      description: editingDescription || null,
+      status: editingStatus,
+      assigned_to: editingAssignee && editingAssignee !== 'unassigned' ? editingAssignee : null,
+    };
+    const { error } = await supabase.from('tasks').update(updates).eq('id', task.id);
+    setSaving(false);
+    if (error) {
+      toast({ title: 'Error', description: 'Failed to save changes', variant: 'destructive' });
+      return;
+    }
+    toast({ title: 'Saved', description: 'Task updated successfully' });
+    onRefresh();
+    onOpenChange(false);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
@@ -124,26 +161,47 @@ const TaskDetailsDialog = ({ task, open, onOpenChange, onRefresh }: TaskDetailsD
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto space-y-4">
-          {task.description && (
-            <div>
-              <h4 className="text-sm font-semibold mb-2">Description</h4>
-              <p className="text-sm text-muted-foreground">{task.description}</p>
-            </div>
-          )}
+          <div className="space-y-2">
+            <label className="text-sm font-semibold">Title</label>
+            <Input value={editingTitle} onChange={(e) => setEditingTitle(e.target.value)} />
+          </div>
 
-          {task.assignee?.display_name && (
-            <div>
-              <h4 className="text-sm font-semibold mb-2">Assigned to</h4>
-              <div className="flex items-center gap-2">
-                <Avatar className="w-8 h-8">
-                  <AvatarFallback className="bg-gradient-primary text-primary-foreground text-sm">
-                    {task.assignee.display_name.charAt(0).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-                <span className="text-sm">{task.assignee.display_name}</span>
-              </div>
+          <div className="space-y-2">
+            <label className="text-sm font-semibold">Description</label>
+            <Textarea rows={3} value={editingDescription} onChange={(e) => setEditingDescription(e.target.value)} />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-semibold">Status</label>
+              <Select value={editingStatus} onValueChange={(v: any) => setEditingStatus(v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="todo">To Do</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          )}
+            <div className="space-y-2">
+              <label className="text-sm font-semibold">Assignee</label>
+              <Select value={editingAssignee} onValueChange={setEditingAssignee}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Unassigned" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unassigned">Unassigned</SelectItem>
+                  {teamMembers.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.display_name || 'Unknown'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
           <div>
             <h4 className="text-sm font-semibold mb-3">Comments</h4>
@@ -187,6 +245,9 @@ const TaskDetailsDialog = ({ task, open, onOpenChange, onRefresh }: TaskDetailsD
           />
           <Button type="submit" size="icon" disabled={loading || !newComment.trim()}>
             <Send className="w-4 h-4" />
+          </Button>
+          <Button type="button" onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving...' : 'Save changes'}
           </Button>
         </form>
       </DialogContent>

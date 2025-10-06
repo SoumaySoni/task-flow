@@ -61,7 +61,7 @@ const CreateTaskDialog = ({
       description: description || null,
       status,
       project_id: projectId,
-      assigned_to: assignedTo || null,
+      assigned_to: assignedTo && assignedTo !== 'unassigned' ? assignedTo : null,
       created_by: userId,
     });
 
